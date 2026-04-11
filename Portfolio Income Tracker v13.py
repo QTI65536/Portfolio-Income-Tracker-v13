@@ -59,10 +59,12 @@ def clean_numeric(value):
 def strip_ext(filename):
     return filename.rsplit('.', 1)[0] if '.' in filename else filename
 
+# --- 3. DATA ENGINE (CLOUD-RESILIENT) ---
 @st.cache_data(ttl=3600)
 def get_unified_data(tickers):
     if not tickers: return {}
     try:
+        # 1mo period bypasses many "stale data" blocks on cloud IPs
         raw_data = yf.download(tickers, period="1mo", actions=True, auto_adjust=True, progress=False)
         if raw_data.empty: return {}
     except: return {}
@@ -77,7 +79,9 @@ def get_unified_data(tickers):
             div_h = t_prices['Dividends'].dropna()
             div_h = div_h[div_h > 0]
             
-            tk = yf.Ticker(t); f_info = tk.fast_info
+            tk = yf.Ticker(t)
+            f_info = tk.fast_info
+            
             div_r = f_info.get('dividendRate', 0)
             if (div_r is None or div_r == 0) and not div_h.empty:
                 div_r = float(div_h[div_h.index > (datetime.now() - timedelta(days=365))].sum())
@@ -90,10 +94,10 @@ def get_unified_data(tickers):
             is_cef = t in HARDCODED_CEFS or "closed-end" in sumry
             sector = "Cash" if t in CASH_SYMBOLS else ("CEF" if is_cef else info.get('sector', 'Other'))
 
-            # SAFETY FORENSICS
+            # FORENSICS
             reasons = []
             if t in MREIT_SYMBOLS:
-                reasons.append("mREIT structural risk")
+                reasons.append("Structural mREIT risk")
                 reasons.append("High leverage profile")
             elif yld_val > 0.125: reasons.append("Yield Trap (>12.5%)")
             
@@ -129,10 +133,10 @@ with st.sidebar:
             if st.sidebar.button(f"📍 {strip_ext(n)}" if n == st.session_state.get('active_portfolio_name') else strip_ext(n), use_container_width=True):
                 st.session_state.active_portfolio_name = n; st.rerun()
 
-st.markdown(f'<div class="app-branding">Income Portfolio Tracker by QTI (v14.5)</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="app-branding">Income Portfolio Tracker by QTI (v14.6)</div>', unsafe_allow_html=True)
 active = st.session_state.get('active_portfolio_name')
 
-# --- 2. WELCOME SCREEN RESTORATION ---
+# --- 4. STARTUP (Audit: Full Instructions & Symmetrical Design) ---
 if not active:
     st.markdown('<div class="master-title">Welcome to Income Tracker</div>', unsafe_allow_html=True)
     cg, ca = st.columns([1.2, 1])
@@ -177,18 +181,24 @@ with t_edit:
     to_del = st.multiselect("Delete Tickers:", ext_tks)
     if to_del and st.button("🗑️ DELETE SELECTED", type="primary"):
         st.session_state.portfolios[active] = df_e[~df_e['Ticker'].isin(to_del)]; st.rerun()
+    st.divider(); st.subheader("📋 Inventory"); st.download_button("💾 SAVE CURRENT PORTFOLIO", df_e.to_csv(index=False).encode('utf-8'), f"{strip_ext(active)}.csv", "text/csv")
+    html_e = "<div class='html-table-container'><table class='gold-table'><thead><tr><th>Ticker</th><th>Shares</th><th>Avg Cost</th><th>Basis</th></tr></thead><tbody>"
+    for _, r in df_e.sort_values("Ticker").iterrows():
+        sh, co = float(r['Shares']), float(r['Avg Cost'])
+        html_e += f"<tr><td class='tk-bold'>{r['Ticker']}</td><td>{sh:,.2f}</td><td>${co:,.2f}</td><td>${(sh*co):,.0f}</td></tr>"
+    st.markdown(html_e + "</tbody></table></div>", unsafe_allow_html=True)
 
 with t_dash:
     df = st.session_state.portfolios[active].copy()
     if not df.empty:
-        with st.spinner("Market Data Sync..."): meta = get_unified_data(df['Ticker'].unique().tolist())
+        with st.spinner("Analyzing Forensics..."): meta = get_unified_data(df['Ticker'].unique().tolist())
         df['Price'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('price', 0))
         df['D%'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('change_pct', 0))
         df['D$'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('change_val', 0))
         df['Val'] = df['Shares'] * df['Price']
-        df['Inc'] = df['Shares'] * df['Ticker'].map(lambda x: meta.get(x, {}).get('div', 0))
         df['Day_PL'] = df['Shares'] * df['D$']
         df['Total_PL'] = df['Shares'] * (df['Price'] - df['Avg Cost'])
+        df['Inc'] = df['Shares'] * df['Ticker'].map(lambda x: meta.get(x, {}).get('div', 0))
         df['Yield'] = (df['Ticker'].map(lambda x: meta.get(x, {}).get('div', 0)) / df['Price'].replace(0,1)) * 100
         df['Saf'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('safety', 'Tier 2'))
         df['Sec'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('sector', 'Other'))
@@ -230,7 +240,7 @@ with t_dash:
         cal_list = []
         for _, r in df.iterrows():
             if r['Inc'] > 0:
-                try: start = datetime.fromtimestamp(r['ExD']).month if (r['ExD'] and not pd.isna(r['ExD'])) else (1 if int(r['Frq'])==12 else 3)
+                try: start = datetime.fromtimestamp(r['ExD'] if 'ExD' in r else r['ExD']).month if (r['ExD'] if 'ExD' in r else None) else (1 if int(r['Frq'])==12 else 3)
                 except: start = 1
                 for i in range(int(r['Frq'])):
                     idx = (start + (i * (12//int(r['Frq']))) - 1) % 12
