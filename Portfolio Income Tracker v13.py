@@ -18,6 +18,7 @@ st.markdown("""
     .master-title { font-size: 52px !important; color: #2c3e50; font-weight: 900; border-bottom: 3px solid #2ecc71; padding-bottom: 10px; }
     .app-branding { font-size: 22px !important; color: #7f8c8d; font-weight: 400; margin-bottom: -10px; }
     
+    /* HIGH VISIBILITY ACTION BUTTONS */
     .stButton > button { 
         background-color: #2ecc71 !important; color: white !important;
         font-weight: 900 !important; font-size: 22px !important; border-radius: 8px !important;
@@ -86,23 +87,20 @@ def get_unified_data(tickers):
             except: info = {}
 
             sumry = info.get('longBusinessSummary', '').lower()
-            sector = "Cash" if t in CASH_SYMBOLS else ("CEF" if (t in HARDCODED_CEFS or "closed-end" in sumry) else info.get('sector', 'Other'))
+            is_cef = t in HARDCODED_CEFS or "closed-end" in sumry
+            sector = "Cash" if t in CASH_SYMBOLS else ("CEF" if is_cef else info.get('sector', 'Other'))
 
-            # --- FORENSICS ---
+            # SAFETY FORENSICS
             reasons = []
             if t in MREIT_SYMBOLS:
-                reasons.append("Structural mREIT risk")
+                reasons.append("mREIT structural risk")
                 reasons.append("High leverage profile")
             elif yld_val > 0.125: reasons.append("Yield Trap (>12.5%)")
             
             if t not in CASH_SYMBOLS and t not in MREIT_SYMBOLS:
-                if sector == "Utilities":
-                    if (info.get('operatingCashflow', 0) or 0) > 0 and (div_r * info.get('sharesOutstanding', 1) / info.get('operatingCashflow', 1)) > 0.75: reasons.append("Utility OCF Payout")
-                elif sector == "Real Estate":
-                    if (info.get('payoutRatio', 0) or 0) > 0.90: reasons.append("AFFO Over-payout")
-                else:
-                    if (info.get('payoutRatio', 0) or 0) > 0.75: reasons.append("High EPS Payout")
-                if (info.get('debtToEquity', 0) or 0) / 100 > 2.5: reasons.append("High Leverage")
+                if sector == "Utilities" and (info.get('payoutRatio', 0) > 0.80): reasons.append("Utility Payout")
+                elif sector == "Real Estate" and (info.get('payoutRatio', 0) > 0.90): reasons.append("REIT Payout")
+                elif info.get('payoutRatio', 0) > 0.75: reasons.append("High EPS Payout")
 
             tier = "Tier 1: ✅ SAFE" if t in CASH_SYMBOLS else ("Tier 3: 🚨 RISK" if len(reasons) >= 2 else ("Tier 2: ⚠️ STABLE" if len(reasons) == 1 else "Tier 1: ✅ SAFE"))
 
@@ -111,7 +109,7 @@ def get_unified_data(tickers):
                 'div': div_r, 'freq': 12 if len(div_h) > 6 else 4, 'ex_date': info.get('exDividendDate') or (int(div_h.index[-1].timestamp()) if not div_h.empty else None),
                 'sector': sector, 'safety': tier, 'reasons': ", ".join(reasons)
             }
-        except: meta[t] = {'price': 0.0, 'change_val': 0.0, 'change_pct': 0.0, 'div': 0.0, 'freq': 4, 'ex_date': None, 'sector': 'Other', 'safety': 'Tier 3', 'reasons': 'Fetch Error'}
+        except: meta[t] = {'price': 0.0, 'change_val': 0.0, 'change_pct': 0.0, 'div': 0.0, 'freq': 4, 'ex_date': None, 'sector': 'Other', 'safety': 'Tier 3', 'reasons': 'Scrape Fail'}
     return meta
 
 if 'portfolios' not in st.session_state: st.session_state.portfolios = {}
@@ -131,12 +129,33 @@ with st.sidebar:
             if st.sidebar.button(f"📍 {strip_ext(n)}" if n == st.session_state.get('active_portfolio_name') else strip_ext(n), use_container_width=True):
                 st.session_state.active_portfolio_name = n; st.rerun()
 
-st.markdown(f'<div class="app-branding">Income Portfolio Tracker by QTI (v14.4)</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="app-branding">Income Portfolio Tracker by QTI (v14.5)</div>', unsafe_allow_html=True)
 active = st.session_state.get('active_portfolio_name')
 
+# --- 2. WELCOME SCREEN RESTORATION ---
 if not active:
     st.markdown('<div class="master-title">Welcome to Income Tracker</div>', unsafe_allow_html=True)
-    st.info("### 🚀 Getting Started\nUpload a CSV to the sidebar with columns: **Ticker**, **Shares**, **Avg Cost**.")
+    cg, ca = st.columns([1.2, 1])
+    with cg:
+        st.markdown("""
+        ### 🚀 Getting Started
+        Professional dividend tracking with forensic safety analysis.
+        
+        #### **Step-by-Step Instructions:**
+        1. **Create your CSV:** Open Excel or Google Sheets.
+        2. **Columns:** Use exactly 3 headers: **Ticker**, **Shares**, **Avg Cost**.
+        3. **Save:** Save as **CSV (Comma Delimited)**.
+        4. **Upload:** Drag and drop your file into the Sidebar Vault.
+        """)
+    with ca:
+        st.markdown("### 🛠️ Onboarding Options")
+        tmp = pd.DataFrame(columns=["Ticker", "Shares", "Avg Cost"], data=[["SCHD", 100.0, 75.0], ["O", 50.0, 62.0]])
+        st.download_button("💾 Download Template.csv", tmp.to_csv(index=False).encode('utf-8'), "Template.csv", "text/csv")
+        if st.button("📈 Load Default Sample Portfolio"):
+            if os.path.exists("Sample Portfolio.csv"):
+                sdf = pd.read_csv("Sample Portfolio.csv"); sdf.columns = sdf.columns.str.strip()
+                st.session_state.portfolios["Sample Portfolio.csv"] = sdf[["Ticker", "Shares", "Avg Cost"]]
+                st.session_state.active_portfolio_name = "Sample Portfolio.csv"; st.rerun()
     st.stop()
 
 st.markdown(f'<div class="master-title">Portfolio: {strip_ext(active)}</div>', unsafe_allow_html=True)
@@ -152,9 +171,9 @@ with t_edit:
         nc = c3.number_input("Avg Cost", min_value=0.0)
         if st.form_submit_button("COMMIT CHANGES"):
             if final_tk:
-                if ns <= 0: st.session_state.portfolios[active] = df_e[df_e['Ticker'] != final_tk]
-                else: st.session_state.portfolios[active] = pd.concat([df_e[df_e['Ticker'] != final_tk], pd.DataFrame([{"Ticker": final_tk, "Shares": ns, "Avg Cost": nc}])], ignore_index=True)
-                st.rerun()
+                df_e = df_e[df_e['Ticker'] != final_tk]
+                if ns > 0: df_e = pd.concat([df_e, pd.DataFrame([{"Ticker": final_tk, "Shares": ns, "Avg Cost": nc}])], ignore_index=True)
+                st.session_state.portfolios[active] = df_e; st.rerun()
     to_del = st.multiselect("Delete Tickers:", ext_tks)
     if to_del and st.button("🗑️ DELETE SELECTED", type="primary"):
         st.session_state.portfolios[active] = df_e[~df_e['Ticker'].isin(to_del)]; st.rerun()
@@ -162,7 +181,7 @@ with t_edit:
 with t_dash:
     df = st.session_state.portfolios[active].copy()
     if not df.empty:
-        with st.spinner("Market Sync..."): meta = get_unified_data(df['Ticker'].unique().tolist())
+        with st.spinner("Market Data Sync..."): meta = get_unified_data(df['Ticker'].unique().tolist())
         df['Price'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('price', 0))
         df['D%'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('change_pct', 0))
         df['D$'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('change_val', 0))
@@ -170,18 +189,19 @@ with t_dash:
         df['Inc'] = df['Shares'] * df['Ticker'].map(lambda x: meta.get(x, {}).get('div', 0))
         df['Day_PL'] = df['Shares'] * df['D$']
         df['Total_PL'] = df['Shares'] * (df['Price'] - df['Avg Cost'])
-        # UNIFIED YIELD CALCULATION
         df['Yield'] = (df['Ticker'].map(lambda x: meta.get(x, {}).get('div', 0)) / df['Price'].replace(0,1)) * 100
         df['Saf'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('safety', 'Tier 2'))
         df['Sec'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('sector', 'Other'))
         df['Why'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('reasons', ''))
-        df['ExD'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('ex_date'))
         df['Frq'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('freq', 4))
+        df['ExD'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('ex_date'))
 
         m1, m2, m3, m4, m5 = st.columns(5)
-        tv, ti, tg = df['Val'].sum(), df['Inc'].sum(), df['Day_PL'].sum()
-        m1.metric("Portfolio Value", f"${tv:,.0f}"); m2.metric("Today's Change", f"${tg:,.2f}", f"{(tg/(tv-tg)*100) if (tv-tg)!=0 else 0:.2f}%")
-        m3.metric("Annual Income", f"${ti:,.2f}"); m4.metric("Div. Yield", f"{(ti/tv*100) if tv>0 else 0:.2f}%"); m5.metric("YOC", f"{(ti/(df['Shares']*df['Avg Cost']).sum()*100) if (df['Shares']*df['Avg Cost']).sum()>0 else 0:.2f}%")
+        m1.metric("Portfolio Value", f"${df['Val'].sum():,.0f}")
+        m2.metric("Today's Change", f"${df['Day_PL'].sum():,.2f}")
+        m3.metric("Annual Income", f"${df['Inc'].sum():,.2f}")
+        m4.metric("Div. Yield", f"{(df['Inc'].sum()/df['Val'].sum()*100) if df['Val'].sum()>0 else 0:.2f}%")
+        m5.metric("YOC", f"{(df['Inc'].sum()/(df['Shares']*df['Avg Cost']).sum()*100) if (df['Shares']*df['Avg Cost']).sum()>0 else 0:.2f}%")
 
         st.divider(); c1, c2, c3 = st.columns(3)
         def draw_donut(pdf, val_col, lab_col, total_overall):
@@ -195,15 +215,15 @@ with t_dash:
             f.update_layout(height=550, margin=dict(t=30, b=150), hoverlabel=HOVER_STYLE, legend=dict(orientation="h", y=-0.2, x=0.5, xanchor="center"))
             st.plotly_chart(f, use_container_width=True)
 
-        with c1: st.subheader("Dynamic Safety Rating"); draw_donut(df, "Inc", "Saf", ti)
+        with c1: st.subheader("Dynamic Safety Rating"); draw_donut(df, "Inc", "Saf", df['Inc'].sum())
         with c2:
             st.subheader("10-Year Income Forecast"); g_r = st.number_input("Growth %", value=6.0, step=0.5)
-            y_proj = [datetime.now().year + i for i in range(11)]; v_proj = [ti * ((1 + g_r/100)**i) for i in range(11)]
+            y_proj = [datetime.now().year + i for i in range(11)]; v_proj = [df['Inc'].sum() * ((1 + g_r/100)**i) for i in range(11)]
             fig_g = px.area(x=y_proj, y=v_proj); fig_g.update_traces(hovertemplate="<b>Year: %{x}</b><br>Income: $%{y:,.2f}<extra></extra>")
             fig_g.update_layout(height=400, margin=dict(b=50), hoverlabel=HOVER_STYLE); st.plotly_chart(fig_g, use_container_width=True)
         with c3: 
-            st.subheader("Sector Allocation"); v_t = st.radio("View Sector By:", ["Portfolio Value", "Annual Income"], horizontal=True, key="sec_toggle")
-            draw_donut(df, "Val" if v_t == "Portfolio Value" else "Inc", "Sec", tv if v_t == "Portfolio Value" else ti)
+            st.subheader("Sector Allocation"); v_t = st.radio("View Sector By:", ["Portfolio Value", "Annual Income"], horizontal=True, key="sec_t")
+            draw_donut(df, "Val" if v_t == "Portfolio Value" else "Inc", "Sec", df['Val'].sum() if v_t == "Portfolio Value" else df['Inc'].sum())
 
         st.divider(); st.subheader("📅 Monthly Income Distribution")
         mnths = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
