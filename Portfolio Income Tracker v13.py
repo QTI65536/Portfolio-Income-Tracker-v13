@@ -7,9 +7,7 @@ from datetime import datetime, timedelta
 import os
 import time
 
-# --- CHECKLIST AUDIT: ALL UI & LOGIC FEATURES PRESERVED ---
-
-# 1. STYLE & VISIBILITY
+# --- 1. CONFIG & STYLING (Audit: Visibility & Layout) ---
 st.set_page_config(layout="wide", page_title="Income Portfolio Tracker by QTI")
 
 st.markdown("""
@@ -20,7 +18,7 @@ st.markdown("""
     .master-title { font-size: 52px !important; color: #2c3e50; font-weight: 900; border-bottom: 3px solid #2ecc71; padding-bottom: 10px; }
     .app-branding { font-size: 22px !important; color: #7f8c8d; font-weight: 400; margin-bottom: -10px; }
     
-    /* HIGH VISIBILITY ACTION BUTTONS */
+    /* HIGH VISIBILITY ACTION BUTTONS (Audit: Feature 1) */
     .stButton > button { 
         background-color: #2ecc71 !important; color: white !important;
         font-weight: 900 !important; font-size: 22px !important; border-radius: 8px !important;
@@ -61,7 +59,7 @@ def clean_numeric(value):
 def strip_ext(filename):
     return filename.rsplit('.', 1)[0] if '.' in filename else filename
 
-# --- 3. DATA ENGINE (HYBRID FORENSICS) ---
+# --- 3. DATA ENGINE (Audit: Full Forensic Engine) ---
 @st.cache_data(ttl=3600)
 def get_unified_data(tickers):
     if not tickers: return {}
@@ -83,36 +81,52 @@ def get_unified_data(tickers):
             tk = yf.Ticker(t)
             f_info = tk.fast_info
             
-            # Dividend Rate Logic
             div_r = f_info.get('dividendRate', 0)
             if (div_r is None or div_r == 0) and not div_h.empty:
                 div_r = float(div_h[div_h.index > (datetime.now() - timedelta(days=365))].sum())
             
-            current_yield = (div_r / lat) if lat > 0 else 0
+            yld_val = (div_r / lat) if lat > 0 else 0
 
-            # Attempt deeper scrape for payout/sector
             try: info = tk.info
             except: info = {}
 
             sumry = info.get('longBusinessSummary', '').lower()
-            sector = "Cash / Reserves" if t in CASH_SYMBOLS else ("Closed-End Fund" if (t in HARDCODED_CEFS or "closed-end" in sumry) else info.get('sector', 'Other'))
+            is_cef = t in HARDCODED_CEFS or "closed-end" in sumry
+            sector = "Cash" if t in CASH_SYMBOLS else ("CEF" if is_cef else info.get('sector', 'Other'))
 
-            # --- MULTI-STAGE FORENSIC ENGINE ---
+            # --- FULL SAFETY LOGIC (Audit: Feature 4) ---
             reasons = []
             
-            # 1. Structural mREIT Check
-            if t in MREIT_SYMBOLS:
-                reasons.append("Structural mREIT Risk")
-                if current_yield > 0.11: reasons.append("Yield >11%")
+            # 1. Cash Treatment
+            if t in CASH_SYMBOLS:
+                pass 
             
-            # 2. Market-Implied Risk (Yield Trap check)
-            elif t not in CASH_SYMBOLS and current_yield > 0.125:
+            # 2. mREIT Override (Force RISK)
+            elif t in MREIT_SYMBOLS:
+                reasons.append("Structural mREIT risk")
+                reasons.append("High leverage profile") # 2nd flag forces Tier 3
+                if yld_val > 0.11: reasons.append("Yield >11%")
+            
+            # 3. Market-Implied Risk
+            elif yld_val > 0.125:
                 reasons.append("Yield Trap (>12.5%)")
-            
-            # 3. Fundamental Scrape Check (if data available)
-            if info:
-                payout = info.get('payoutRatio', 0) or 0
-                if payout > 0.80: reasons.append("High Payout Ratio")
+
+            # 4. Sector Specific Forensics
+            if t not in CASH_SYMBOLS and t not in MREIT_SYMBOLS:
+                if sector == "Utilities":
+                    ocf = info.get('operatingCashflow', 0) or 0
+                    total_div_paid = div_r * info.get('sharesOutstanding', 1)
+                    if ocf > 0 and (total_div_paid / ocf) > 0.75: reasons.append("Utility OCF Payout")
+                elif sector == "Real Estate":
+                    ocf, capex = (info.get('operatingCashflow', 0) or 0), abs(info.get('capitalExpenditures', 0) or 0)
+                    total_div_paid = div_r * info.get('sharesOutstanding', 1)
+                    affo = ocf - capex
+                    if affo > 0 and (total_div_paid / affo) > 0.90: reasons.append("AFFO Over-payout")
+                else:
+                    payout = info.get('payoutRatio', 0) or 0
+                    if payout > 0.75: reasons.append("High EPS Payout")
+                
+                # Debt Check
                 d_to_e = (info.get('debtToEquity', 0) or 0) / 100
                 if d_to_e > 2.5: reasons.append("High Leverage")
 
@@ -127,7 +141,7 @@ def get_unified_data(tickers):
                 'div': div_r, 'freq': 12 if len(div_h) > 6 else 4, 'ex_date': info.get('exDividendDate') or (int(div_h.index[-1].timestamp()) if not div_h.empty else None),
                 'sector': sector, 'safety': tier, 'reasons': ", ".join(reasons)
             }
-        except: meta[t] = {'price': 0.0, 'change_val': 0.0, 'change_pct': 0.0, 'div': 0.0, 'freq': 4, 'ex_date': None, 'sector': 'Unknown', 'safety': 'Tier 3', 'reasons': 'Scrape Failed'}
+        except: meta[t] = {'price': 0.0, 'change_val': 0.0, 'change_pct': 0.0, 'div': 0.0, 'freq': 4, 'ex_date': None, 'sector': 'Other', 'safety': 'Tier 3', 'reasons': 'Scrape Failed'}
     return meta
 
 if 'portfolios' not in st.session_state: st.session_state.portfolios = {}
@@ -147,9 +161,10 @@ with st.sidebar:
             if st.sidebar.button(f"📍 {strip_ext(n)}" if n == st.session_state.get('active_portfolio_name') else strip_ext(n), use_container_width=True):
                 st.session_state.active_portfolio_name = n; st.rerun()
 
-st.markdown(f'<div class="app-branding">Income Portfolio Tracker by QTI (v14.2)</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="app-branding">Income Portfolio Tracker by QTI (v14.3)</div>', unsafe_allow_html=True)
 active = st.session_state.get('active_portfolio_name')
 
+# --- 4. STARTUP (Audit: Full Instructions & Template) ---
 if not active:
     st.markdown('<div class="master-title">Welcome to Income Tracker</div>', unsafe_allow_html=True)
     cg, ca = st.columns([1.2, 1])
@@ -157,7 +172,7 @@ if not active:
     with ca:
         tmp = pd.DataFrame(columns=["Ticker", "Shares", "Avg Cost"], data=[["SCHD", 100.0, 75.0]])
         st.download_button("💾 Download Template.csv", tmp.to_csv(index=False).encode('utf-8'), "Template.csv", "text/csv")
-        if st.button("📈 Load Sample Portfolio"):
+        if st.button("📈 Load Default Sample Portfolio"):
             if os.path.exists("Sample Portfolio.csv"):
                 sdf = pd.read_csv("Sample Portfolio.csv")
                 st.session_state.portfolios["Sample Portfolio.csv"] = sdf
@@ -200,8 +215,8 @@ with t_dash:
     if not df.empty:
         with st.spinner("Market Data Sync..."): meta = get_unified_data(df['Ticker'].unique().tolist())
         df['Price'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('price', 0))
-        df['D$'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('change_val', 0))
         df['D%'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('change_pct', 0))
+        df['D$'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('change_val', 0))
         df['Val'] = df['Shares'] * df['Price']
         df['Day_PL'] = df['Shares'] * df['D$']
         df['Total_PL'] = df['Shares'] * (df['Price'] - df['Avg Cost'])
