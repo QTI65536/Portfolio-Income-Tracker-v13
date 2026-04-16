@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import os
 import time
 
-# --- 1. CONFIG & STYLING ---
+# --- 1. CONFIG & STYLING ---   
 st.set_page_config(layout="wide", page_title="Income Portfolio Tracker by QTI")
 
 st.markdown("""
