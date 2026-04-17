@@ -18,6 +18,13 @@ st.markdown("""
     .master-title { font-size: 52px !important; color: #2c3e50; font-weight: 900; border-bottom: 3px solid #2ecc71; padding-bottom: 10px; }
     .app-branding { font-size: 22px !important; color: #7f8c8d; font-weight: 400; margin-bottom: -10px; }
 
+    /* RADAR STYLING */
+    .radar-container { background-color: #f8f9fa; border-radius: 12px; padding: 20px; border-left: 8px solid #3498db; margin-bottom: 25px; overflow-x: auto; white-space: nowrap; }
+    .radar-card { display: inline-block; background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-right: 15px; min-width: 200px; text-align: center; border-top: 4px solid #3498db; }
+    .radar-ticker { font-size: 24px; font-weight: 900; color: #2c3e50; }
+    .radar-date { font-size: 16px; color: #e67e22; font-weight: 700; }
+    .radar-amt { font-size: 18px; color: #27ae60; font-weight: 800; }
+
     /* HIGH VISIBILITY ACTION BUTTONS */
     .stButton > button { 
         background-color: #2ecc71 !important; color: white !important;
@@ -31,12 +38,6 @@ st.markdown("""
         height: 3.8rem !important; width: 100% !important; text-transform: uppercase !important;
         border: 2px solid white !important; transition: all 0.2s ease !important;
     }
-    
-    .radar-container { background-color: #f8f9fa; border-radius: 12px; padding: 20px; border-left: 8px solid #3498db; margin-bottom: 25px; overflow-x: auto; white-space: nowrap; }
-    .radar-card { display: inline-block; background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-right: 15px; min-width: 200px; text-align: center; border-top: 4px solid #3498db; }
-    .radar-ticker { font-size: 24px; font-weight: 900; color: #2c3e50; }
-    .radar-date { font-size: 16px; color: #e67e22; font-weight: 700; }
-    .radar-amt { font-size: 18px; color: #27ae60; font-weight: 800; }
 
     .html-table-container { width: 100%; overflow-x: auto; margin-top: 10px; }
     .gold-table { width: 100%; border-collapse: collapse; font-size: 22px !important; font-family: sans-serif; }
@@ -85,7 +86,6 @@ def get_unified_data(tickers):
             tk = yf.Ticker(t)
             f_info = tk.fast_info
             
-            # Hybrid Div Fetch
             div_r = f_info.get('last_dividend', 0)
             if (div_r is None or div_r == 0) and not div_h.empty:
                 div_r = float(div_h[div_h.index > (datetime.now() - timedelta(days=365))].sum())
@@ -93,12 +93,10 @@ def get_unified_data(tickers):
             try: info = tk.info
             except: info = {}
 
-            # CEF & Sector Detection
             sumry = info.get('longBusinessSummary', '').lower()
             is_cef = t in HARDCODED_CEFS or "closed-end" in sumry
             sector = "Cash" if t in CASH_SYMBOLS else ("CEF" if is_cef else info.get('sector', 'Other'))
 
-            # Full Safety Forensics
             reasons = []
             if t in MREIT_SYMBOLS:
                 reasons.append("mREIT structural risk")
@@ -117,7 +115,7 @@ def get_unified_data(tickers):
                 'div': div_r, 'freq': 12 if len(div_h) > 6 else 4, 'ex_date': info.get('exDividendDate'),
                 'sector': sector, 'safety': tier, 'reasons': ", ".join(reasons)
             }
-        except: meta[t] = {'price': 0.0, 'change_val': 0.0, 'change_pct': 0.0, 'div': 0.0, 'freq': 4, 'ex_date': None, 'sector': 'Other', 'safety': 'Tier 3', 'reasons': 'Cloud Block'}
+        except: meta[t] = {'price': 0.0, 'change_val': 0.0, 'change_pct': 0.0, 'div': 0.0, 'freq': 4, 'ex_date': None, 'sector': 'Other', 'safety': 'Tier 3', 'reasons': 'Error'}
     return meta
 
 if 'portfolios' not in st.session_state: st.session_state.portfolios = {}
@@ -185,17 +183,19 @@ with t_dash:
         df['Sec'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('sector', 'Other'))
         df['Why'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('reasons', ''))
         df['ExD'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('ex_date'))
-        df['Frq'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('freq', 4))
-        df['Yield'] = (df['Inc'] / df['Val'].replace(0,1)) * 100
+        df['Frq'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('freq', 4)); df['Yield'] = (df['Inc'] / df['Val'].replace(0,1)) * 100
 
-        # Radar Component
+        # --- RADAR (VALUERROR CRASH PROTECTION ADDED) ---
         radar_items = []
         now = datetime.now(); horizon = now + timedelta(days=14)
         for _, r in df.iterrows():
-            if r['ExD']:
-                ex_dt = (datetime.fromtimestamp(r['ExD']) + timedelta(hours=12)).replace(hour=0, minute=0, second=0, microsecond=0)
-                if now <= ex_dt <= horizon:
-                    radar_items.append({'Tk': r['Ticker'], 'Dt': ex_dt, 'Amt': r['Inc']/r['Frq']})
+            # FIXED: Validation check for timestamp before conversion
+            if pd.notna(r['ExD']) and isinstance(r['ExD'], (int, float)):
+                try:
+                    ex_dt = (datetime.fromtimestamp(r['ExD']) + timedelta(hours=12)).replace(hour=0, minute=0, second=0, microsecond=0)
+                    if now <= ex_dt <= horizon:
+                        radar_items.append({'Tk': r['Ticker'], 'Dt': ex_dt, 'Amt': r['Inc']/r['Frq']})
+                except: pass
         if radar_items:
             st.subheader("📡 Dividend Radar (Next 14 Days)")
             r_html = '<div class="radar-container">'
@@ -232,7 +232,8 @@ with t_dash:
         cal_list = []
         for _, r in df.iterrows():
             if r['Inc'] > 0:
-                start = (datetime.fromtimestamp(r['ExD']) + timedelta(hours=12)).month if r['ExD'] else (1 if int(r['Frq'])==12 else 3)
+                # Validation check for Calendar
+                start = (datetime.fromtimestamp(r['ExD']) + timedelta(hours=12)).month if pd.notna(r['ExD']) and isinstance(r['ExD'], (int, float)) else (1 if int(r['Frq'])==12 else 3)
                 for i in range(int(r['Frq'])):
                     idx = (start + (i * (12//int(r['Frq']))) - 1) % 12
                     cal_list.append({'Ticker': r['Ticker'], 'Month': mnths[idx], 'MonthInc': r['Inc']/int(r['Frq']), 'Sort': idx})
