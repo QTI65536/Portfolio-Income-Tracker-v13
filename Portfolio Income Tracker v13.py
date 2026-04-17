@@ -215,7 +215,7 @@ with t_edit:
                     st.session_state.portfolios[active] = pd.concat(
                         [df_e, pd.DataFrame([{"Ticker": final_tk, "Shares": ns, "Avg Cost": nc}])], ignore_index=True)
                 st.toast("✅ Updated!");
-                time.sleep(0.5);
+                time.sleep(2);
                 st.rerun()
     st.divider();
     st.subheader("📋 Delete Tickers")
