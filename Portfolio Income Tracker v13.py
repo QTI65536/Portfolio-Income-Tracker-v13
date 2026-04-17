@@ -83,9 +83,7 @@ def get_unified_data(tickers):
             prev = float(valid_c.iloc[-2]) if len(valid_c) > 1 else lat
             div_h = t_prices['Dividends'].dropna()[t_prices['Dividends'] > 0]
             
-            tk = yf.Ticker(t)
-            f_info = tk.fast_info
-            
+            tk = yf.Ticker(t); f_info = tk.fast_info
             div_r = f_info.get('last_dividend', 0)
             if (div_r is None or div_r == 0) and not div_h.empty:
                 div_r = float(div_h[div_h.index > (datetime.now() - timedelta(days=365))].sum())
@@ -99,15 +97,9 @@ def get_unified_data(tickers):
 
             reasons = []
             if t in MREIT_SYMBOLS:
-                reasons.append("mREIT structural risk")
-                reasons.append("High leverage profile")
-            elif lat > 0 and (div_r / lat) > 0.125: 
-                reasons.append("Yield Trap (>12.5%)")
+                reasons.append("mREIT risk"); reasons.append("Leverage")
+            elif lat > 0 and (div_r / lat) > 0.125: reasons.append("Yield Trap")
             
-            if t not in CASH_SYMBOLS and t not in MREIT_SYMBOLS:
-                payout = info.get('payoutRatio', 0) or 0
-                if payout > 0.75: reasons.append("High EPS Payout")
-
             tier = "Tier 1: ✅ SAFE" if t in CASH_SYMBOLS else ("Tier 3: 🚨 RISK" if len(reasons) >= 2 else ("Tier 2: ⚠️ STABLE" if len(reasons) == 1 else "Tier 1: ✅ SAFE"))
 
             meta[t] = {
@@ -138,14 +130,9 @@ with st.sidebar:
                 st.session_state.active_portfolio_name = n; st.rerun()
 
 active = st.session_state.get('active_portfolio_name')
-
 if not active:
     st.markdown('<div class="master-title">Welcome to Income Tracker</div>', unsafe_allow_html=True)
-    cg, ca = st.columns([1.2, 1])
-    with cg: st.markdown("### 🚀 Getting Started\n1. **Excel:** Columns: **Ticker**, **Shares**, **Avg Cost**.\n2. **Save:** Save as **CSV**.\n3. **Upload:** Use Sidebar Vault.")
-    with ca:
-        tmp = pd.DataFrame(columns=["Ticker", "Shares", "Avg Cost"], data=[["SCHD", 100.0, 75.0]])
-        st.download_button("💾 Download Template.csv", tmp.to_csv(index=False).encode('utf-8'), "Template.csv", "text/csv")
+    st.info("Upload a CSV with **Ticker**, **Shares**, **Avg Cost** to begin.")
     st.stop()
 
 st.markdown(f'<div class="master-title">Portfolio: {strip_ext(active)}</div>', unsafe_allow_html=True)
@@ -185,16 +172,14 @@ with t_dash:
         df['ExD'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('ex_date'))
         df['Frq'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('freq', 4)); df['Yield'] = (df['Inc'] / df['Val'].replace(0,1)) * 100
 
-        # --- RADAR (VALUERROR CRASH PROTECTION ADDED) ---
+        # Radar
         radar_items = []
         now = datetime.now(); horizon = now + timedelta(days=14)
         for _, r in df.iterrows():
-            # FIXED: Validation check for timestamp before conversion
             if pd.notna(r['ExD']) and isinstance(r['ExD'], (int, float)):
                 try:
                     ex_dt = (datetime.fromtimestamp(r['ExD']) + timedelta(hours=12)).replace(hour=0, minute=0, second=0, microsecond=0)
-                    if now <= ex_dt <= horizon:
-                        radar_items.append({'Tk': r['Ticker'], 'Dt': ex_dt, 'Amt': r['Inc']/r['Frq']})
+                    if now <= ex_dt <= horizon: radar_items.append({'Tk': r['Ticker'], 'Dt': ex_dt, 'Amt': r['Inc']/r['Frq']})
                 except: pass
         if radar_items:
             st.subheader("📡 Dividend Radar (Next 14 Days)")
@@ -221,7 +206,10 @@ with t_dash:
 
         with c1: st.subheader("Safety Rating"); draw_donut(df, "Inc", "Saf", ti)
         with c2:
-            st.subheader("10-Year Forecast"); g_r = st.number_input("Growth %", 6.0, 0.5); y_p = [datetime.now().year + i for i in range(11)]; v_p = [ti * ((1 + g_r/100)**i) for i in range(11)]
+            st.subheader("10-Year Forecast")
+            # FIXED CLAMP: min, max, and value explicitly set to prevent StreamlitValueAboveMaxError
+            g_r = st.number_input("Growth %", min_value=0.0, max_value=100.0, value=6.0, step=0.5)
+            y_p = [datetime.now().year + i for i in range(11)]; v_p = [ti * ((1 + g_r/100)**i) for i in range(11)]
             fig_g = go.Figure(data=[go.Scatter(x=y_p, y=v_p, fill='tozeroy', mode='lines+markers', customdata=v_p, hovertemplate="<b>Year: %{x}</b><br>Income: $%{customdata:,.2f}<extra></extra>")])
             fig_g.update_layout(height=350, margin=dict(b=0), hoverlabel=HOVER_STYLE); st.plotly_chart(fig_g, use_container_width=True)
         with c3: st.subheader("Sector Allocation"); draw_donut(df, "Val", "Sec", tv)
@@ -232,7 +220,6 @@ with t_dash:
         cal_list = []
         for _, r in df.iterrows():
             if r['Inc'] > 0:
-                # Validation check for Calendar
                 start = (datetime.fromtimestamp(r['ExD']) + timedelta(hours=12)).month if pd.notna(r['ExD']) and isinstance(r['ExD'], (int, float)) else (1 if int(r['Frq'])==12 else 3)
                 for i in range(int(r['Frq'])):
                     idx = (start + (i * (12//int(r['Frq']))) - 1) % 12
@@ -247,8 +234,8 @@ with t_dash:
 
         # Detailed Analytics
         st.divider(); st.subheader("📋 Detailed Analytics")
-        s_map = {"Ticker":"Ticker", "Sector":"Sec", "Safety":"Saf", "Price":"Price", "Day %":"D%", "Value":"Val", "Income":"Inc"}
-        sc1, sc2 = st.columns(2); s_by = sc1.selectbox("Sort By:", list(s_map.keys()), index=5); s_ord = sc2.radio("Order:", ["Descending", "Ascending"], horizontal=True)
+        s_map = {"Ticker":"Ticker", "Sector":"Sec", "Safety":"Saf", "Price":"Price", "Day %":"D%", "Day's P/L":"Day_PL", "Total P/L":"Total_PL", "Yield":"Yield", "Value":"Val", "Income":"Inc"}
+        sc1, sc2 = st.columns(2); s_by = sc1.selectbox("Sort By:", list(s_map.keys()), index=8); s_ord = sc2.radio("Order:", ["Descending", "Ascending"], horizontal=True)
         df_s = df.sort_values(by=s_map[s_by], ascending=(s_ord=="Ascending"))
         h = "<div class='html-table-container'><table class='gold-table'><thead><tr><th>Ticker</th><th>Sector</th><th>Safety</th><th>Price</th><th>Day %</th><th>Day P/L</th><th>Total P/L</th><th>Yield</th><th>Value</th><th>Income</th></tr></thead><tbody>"
         for _, r in df_s.iterrows():
