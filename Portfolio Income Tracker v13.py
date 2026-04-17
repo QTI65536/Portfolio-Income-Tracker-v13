@@ -18,14 +18,12 @@ st.markdown("""
     .master-title { font-size: 52px !important; color: #2c3e50; font-weight: 900; border-bottom: 3px solid #2ecc71; padding-bottom: 10px; }
     .app-branding { font-size: 22px !important; color: #7f8c8d; font-weight: 400; margin-bottom: -10px; }
 
-    /* RADAR STYLING */
     .radar-container { background-color: #f8f9fa; border-radius: 12px; padding: 20px; border-left: 8px solid #3498db; margin-bottom: 25px; overflow-x: auto; white-space: nowrap; }
     .radar-card { display: inline-block; background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-right: 15px; min-width: 200px; text-align: center; border-top: 4px solid #3498db; }
     .radar-ticker { font-size: 24px; font-weight: 900; color: #2c3e50; }
     .radar-date { font-size: 16px; color: #e67e22; font-weight: 700; }
     .radar-amt { font-size: 18px; color: #27ae60; font-weight: 800; }
 
-    /* HIGH VISIBILITY ACTION BUTTONS */
     .stButton > button { 
         background-color: #2ecc71 !important; color: white !important;
         font-weight: 900 !important; font-size: 22px !important; border-radius: 8px !important;
@@ -65,7 +63,6 @@ def clean_numeric(value):
 
 def strip_ext(filename): return filename.rsplit('.', 1)[0] if '.' in filename else filename
 
-# --- 3. CLOUD-RESILIENT DATA ENGINE ---
 @st.cache_data(ttl=3600)
 def get_unified_data(tickers):
     if not tickers: return {}
@@ -104,7 +101,7 @@ def get_unified_data(tickers):
 
             meta[t] = {
                 'price': lat, 'change_val': lat - prev, 'change_pct': (((lat - prev)/prev)*100) if prev > 0 else 0,
-                'div': div_r, 'freq': 12 if len(div_h) > 6 else 4, 'ex_date': info.get('exDividendDate'),
+                'div': div_r, 'freq': 12 if len(div_h) > 6 else (4 if len(div_h) > 2 else 2), 'ex_date': info.get('exDividendDate'),
                 'sector': sector, 'safety': tier, 'reasons': ", ".join(reasons)
             }
         except: meta[t] = {'price': 0.0, 'change_val': 0.0, 'change_pct': 0.0, 'div': 0.0, 'freq': 4, 'ex_date': None, 'sector': 'Other', 'safety': 'Tier 3', 'reasons': 'Error'}
@@ -168,7 +165,6 @@ with t_dash:
         df['Day_PL'] = df['Shares'] * df['D$']; df['Total_PL'] = df['Shares'] * (df['Price'] - df['Avg Cost'])
         df['Saf'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('safety', 'Tier 1'))
         df['Sec'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('sector', 'Other'))
-        df['Why'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('reasons', ''))
         df['ExD'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('ex_date'))
         df['Frq'] = df['Ticker'].map(lambda x: meta.get(x, {}).get('freq', 4)); df['Yield'] = (df['Inc'] / df['Val'].replace(0,1)) * 100
 
@@ -206,33 +202,46 @@ with t_dash:
 
         with c1: st.subheader("Safety Rating"); draw_donut(df, "Inc", "Saf", ti)
         with c2:
-            st.subheader("10-Year Forecast")
-            # FIXED CLAMP: min, max, and value explicitly set to prevent StreamlitValueAboveMaxError
-            g_r = st.number_input("Growth %", min_value=0.0, max_value=100.0, value=6.0, step=0.5)
+            st.subheader("10-Year Forecast"); g_r = st.number_input("Growth %", min_value=0.0, max_value=100.0, value=6.0, step=0.5)
             y_p = [datetime.now().year + i for i in range(11)]; v_p = [ti * ((1 + g_r/100)**i) for i in range(11)]
             fig_g = go.Figure(data=[go.Scatter(x=y_p, y=v_p, fill='tozeroy', mode='lines+markers', customdata=v_p, hovertemplate="<b>Year: %{x}</b><br>Income: $%{customdata:,.2f}<extra></extra>")])
             fig_g.update_layout(height=350, margin=dict(b=0), hoverlabel=HOVER_STYLE); st.plotly_chart(fig_g, use_container_width=True)
         with c3: st.subheader("Sector Allocation"); draw_donut(df, "Val", "Sec", tv)
 
-        # Monthly Calendar
+        # --- RESTORED 12-MONTH CALENDAR LOGIC ---
         st.divider(); st.subheader("📅 Monthly Income Distribution")
         mnths = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
         cal_list = []
         for _, r in df.iterrows():
             if r['Inc'] > 0:
-                start = (datetime.fromtimestamp(r['ExD']) + timedelta(hours=12)).month if pd.notna(r['ExD']) and isinstance(r['ExD'], (int, float)) else (1 if int(r['Frq'])==12 else 3)
+                # Determine the 'Seed Month' (First month of payment)
+                try:
+                    seed = (datetime.fromtimestamp(r['ExD']) + timedelta(hours=12)).month if pd.notna(r['ExD']) else 1
+                except: seed = 1
+                
+                # Project payments across 12 months based on frequency
+                step = 12 // int(r['Frq'])
                 for i in range(int(r['Frq'])):
-                    idx = (start + (i * (12//int(r['Frq']))) - 1) % 12
-                    cal_list.append({'Ticker': r['Ticker'], 'Month': mnths[idx], 'MonthInc': r['Inc']/int(r['Frq']), 'Sort': idx})
+                    # Calculate the month index (0-11)
+                    m_idx = (seed + (i * step) - 1) % 12
+                    cal_list.append({'Ticker': r['Ticker'], 'Month': mnths[m_idx], 'MonthInc': r['Inc']/int(r['Frq']), 'Sort': m_idx})
+        
         if cal_list:
             c_df = pd.DataFrame(cal_list)
-            def m_st(g):
-                s_g = g.sort_values('MonthInc', ascending=False).head(10); b = "<br>".join([f"• {t}: <b>${amt:,.2f}</b>" for t, amt in zip(s_g['Ticker'], s_g['MonthInc'])])
+            # Group by month and build hover text
+            def m_agg(g):
+                s_g = g.sort_values('MonthInc', ascending=False).head(10)
+                b = "<br>".join([f"• {t}: <b>${amt:,.2f}</b>" for t, amt in zip(s_g['Ticker'], s_g['MonthInc'])])
                 return pd.Series({'Total': g['MonthInc'].sum(), 'Break': f"<b>Monthly Total: ${g['MonthInc'].sum():,.2f}</b><br><br>{b}"})
-            c_s = c_df.groupby(['Month', 'Sort']).apply(m_st).reset_index().sort_values('Sort')
-            fig_c = go.Figure(data=[go.Bar(x=c_s['Month'], y=c_s['Total'], text=c_s['Total'], texttemplate='$%{text:.2s}', customdata=c_s['Break'], hovertemplate="<b>%{x}</b><br>%{customdata}<extra></extra>")]); fig_c.update_layout(height=400, hoverlabel=HOVER_STYLE); st.plotly_chart(fig_c, use_container_width=True)
+            c_s = c_df.groupby(['Month', 'Sort']).apply(m_agg).reset_index().sort_values('Sort')
+            
+            # Ensure all 12 months are represented even if zero
+            full_year = pd.DataFrame({'Month': mnths, 'Sort': range(12)})
+            c_s = full_year.merge(c_s, on=['Month', 'Sort'], how='left').fillna({'Total': 0, 'Break': 'No income this month'})
+            
+            fig_c = go.Figure(data=[go.Bar(x=c_s['Month'], y=c_s['Total'], customdata=c_s['Break'], hovertemplate="<b>%{x}</b><br>%{customdata}<extra></extra>")])
+            fig_c.update_layout(height=400, hoverlabel=HOVER_STYLE, xaxis_title="Month", yaxis_title="Income ($)"); st.plotly_chart(fig_c, use_container_width=True)
 
-        # Detailed Analytics
         st.divider(); st.subheader("📋 Detailed Analytics")
         s_map = {"Ticker":"Ticker", "Sector":"Sec", "Safety":"Saf", "Price":"Price", "Day %":"D%", "Day's P/L":"Day_PL", "Total P/L":"Total_PL", "Yield":"Yield", "Value":"Val", "Income":"Inc"}
         sc1, sc2 = st.columns(2); s_by = sc1.selectbox("Sort By:", list(s_map.keys()), index=8); s_ord = sc2.radio("Order:", ["Descending", "Ascending"], horizontal=True)
